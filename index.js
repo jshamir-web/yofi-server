@@ -72,8 +72,8 @@ Analyze the provided customer data and return a fraud risk assessment in this EX
   "documents": []
 }
 
-Generate 1-3 predictions, 2-5 signals, 1-2 segments, and 2-3 analytics metrics.
-Base everything on the real signals in the data provided. Be specific and realistic.`;
+Generate exactly 1 prediction with exactly 2 signals, exactly 1 segment, and exactly 2 analytics metrics.
+Keep all string values SHORT (under 100 chars). Be specific but concise.`;
 
   const fieldLines = Object.entries(fields)
     .filter(([k]) => !["pageTitle","pageUrl"].includes(k))
@@ -105,14 +105,18 @@ Base everything on the real signals in the data provided. Be specific and realis
   try {
     const response = await client.messages.create({
       model:      "claude-haiku-4-5",
-      max_tokens: 1500,
+      max_tokens: 2048,
       system:     systemPrompt,
       messages:   [{ role: "user", content: userContent }],
     });
 
     const raw     = response.content?.[0]?.text || "{}";
+    // Strip markdown fences and find the JSON object
     const cleaned = raw.replace(/```json\n?/g, "").replace(/```/g, "").trim();
-    const parsed  = JSON.parse(cleaned);
+    // Extract just the JSON object in case there's surrounding text
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("No JSON found in response");
+    const parsed  = JSON.parse(jsonMatch[0]);
     res.json(parsed);
   } catch (err) {
     console.error("Error:", err.message);
