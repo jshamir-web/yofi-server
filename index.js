@@ -14,19 +14,20 @@ app.get("/", (req, res) => res.json({ status: "ok", service: "Yofi Risk Server" 
 
 // ── Risk assessment endpoint ───────────────────────────────────────────────────
 app.post("/assess", async (req, res) => {
-  const { message, email, orderId, pageUrl, screenshot } = req.body;
+  const { message, email, orderId, pageUrl, screenshot, fields = {} } = req.body;
 
-  if (!message || !email || !orderId) {
-    return res.status(400).json({ error: "message, email, and orderId are required." });
+  if (!message) {
+    return res.status(400).json({ error: "message is required." });
   }
 
   const systemPrompt = `You are a fraud risk analyst for an e-commerce platform powered by Yofi.
-Given a customer's email, order ID, page context, and analyst notes, you assess fraud risk.
+You are given automatically extracted customer data from a live page, a screenshot, and analyst notes.
+Assess the fraud risk based on all available signals.
 
 ALWAYS respond with valid JSON in this exact shape:
 {
   "score": <integer 0-100>,
-  "explanation": "<2-3 sentence plain-English summary of the risk assessment and key signals>"
+  "explanation": "<2-4 sentence plain-English summary covering the key risk signals found, what's suspicious or safe, and a recommendation>"
 }
 
 Score guide:
@@ -35,12 +36,25 @@ Score guide:
 - 60-79: High risk — hold and verify
 - 80-100: Critical risk — block
 
-Be realistic and specific. Reference the email, order ID, and any page context provided.`;
+Be specific — reference the actual email, order ID, amount, IP, or any other signals you see.`;
+
+  // Build a rich context string from all scraped fields
+  const fieldLines = Object.entries(fields)
+    .filter(([k]) => !["pageTitle","pageUrl"].includes(k))
+    .map(([k, v]) => `${k}: ${v}`)
+    .join("\n");
 
   const userContent = [
     {
       type: "text",
-      text: `Customer Email: ${email}\nOrder ID: ${orderId}\nPage URL: ${pageUrl || "unknown"}\nAnalyst note: ${message}`,
+      text: [
+        fieldLines ? `--- Detected on page ---\n${fieldLines}` : "",
+        email   ? `Email: ${email}`     : "",
+        orderId ? `Order ID: ${orderId}` : "",
+        pageUrl ? `Page URL: ${pageUrl}` : "",
+        fields.pageTitle ? `Page Title: ${fields.pageTitle}` : "",
+        `\n--- Analyst note ---\n${message}`,
+      ].filter(Boolean).join("\n"),
     },
     ...(screenshot ? [{
       type: "image",
