@@ -9,8 +9,13 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
+    "@langchain/anthropic": "^1.4.0",
+    "@langchain/core": "^1.1.48",
+    "axios": "^1.16.1",
+    "cheerio": "^1.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "langchain": "^1.4.4"
   }
 }

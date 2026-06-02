@@ -2,6 +2,7 @@ require("dotenv").config();
 const express   = require("express");
 const cors      = require("cors");
 const Anthropic = require("@anthropic-ai/sdk");
+const { runAgent } = require("./agent");
 
 const app    = express();
 const client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -115,6 +116,20 @@ Base everything on the real signals in the data provided. Be specific and realis
     res.json(parsed);
   } catch (err) {
     console.error("Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Yofi Docs Agent endpoint ──────────────────────────────────────────────────
+app.post("/chat", async (req, res) => {
+  const { message } = req.body;
+  if (!message) return res.status(400).json({ error: "message is required." });
+
+  try {
+    const answer = await runAgent(message);
+    res.json({ answer });
+  } catch (err) {
+    console.error("Agent error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
