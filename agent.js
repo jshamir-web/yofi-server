@@ -1,125 +1,132 @@
-const { ChatAnthropic }      = require("@langchain/anthropic");
-const { tool }               = require("@langchain/core/tools");
-const { createReactAgent }   = require("langchain/agents");
-const { AgentExecutor }      = require("langchain/agents");
-const { z }                  = require("zod");
-const axios                  = require("axios");
-const cheerio                = require("cheerio");
+const Anthropic = require("@anthropic-ai/sdk");
+const axios     = require("axios");
+const cheerio   = require("cheerio");
 
-// ── Yofi docs pages to index ─────────────────────────────────────────────────
+const client    = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
 const DOCS_BASE = "https://docs.yofi.ai";
 
-// ── Tool: fetch and parse a docs page ────────────────────────────────────────
-const fetchDocsTool = tool(
-  async ({ url }) => {
-    try {
-      // Resolve relative URLs
-      const fullUrl = url.startsWith("http") ? url : `${DOCS_BASE}${url.startsWith("/") ? "" : "/"}${url}`;
-      const res     = await axios.get(fullUrl, { timeout: 10000, headers: { "User-Agent": "YofiAgent/1.0" } });
-      const $       = cheerio.load(res.data);
-
-      // Remove nav, scripts, styles
-      $("script, style, nav, footer, header, .sidebar, .nav, [role='navigation']").remove();
-
-      // Extract main content
-      const main = $("main, article, .content, .docs-content, [role='main']").first();
-      const text = (main.length ? main : $("body")).text()
-        .replace(/\s{3,}/g, "\n\n")
-        .replace(/\n{4,}/g, "\n\n")
-        .trim()
-        .slice(0, 8000); // cap at 8k chars
-
-      return text || "No content found at this URL.";
-    } catch (err) {
-      return `Error fetching ${url}: ${err.message}`;
-    }
+// ── Tools definition (Anthropic tool_use format) ──────────────────────────────
+const TOOLS = [
+  {
+    name: "list_yofi_docs_sections",
+    description: "List the top-level sections and links available in the Yofi documentation. Use this first to discover what pages exist.",
+    input_schema: { type: "object", properties: {}, required: [] },
   },
   {
     name: "fetch_yofi_docs",
-    description: `Fetch and read a page from the Yofi documentation site (docs.yofi.ai).
-Use this to look up specific topics, API details, integration guides, or any Yofi feature.
-Pass a full URL like "https://docs.yofi.ai/yofi-on-enterprise/integrate-with-yofi/sending-data-to-yofi"
-or a relative path like "/getting-started".`,
-    schema: z.object({
-      url: z.string().describe("The full or relative URL of the Yofi docs page to fetch"),
-    }),
-  }
-);
-
-// ── Tool: list top-level docs sections ───────────────────────────────────────
-const listDocsSectionsTool = tool(
-  async () => {
-    try {
-      const res = await axios.get(DOCS_BASE, { timeout: 10000, headers: { "User-Agent": "YofiAgent/1.0" } });
-      const $   = cheerio.load(res.data);
-      const links = [];
-      $("a[href]").each((_, el) => {
-        const href = $(el).attr("href");
-        const text = $(el).text().trim();
-        if (href && href.includes("yofi") && text && text.length > 2 && text.length < 80) {
-          const full = href.startsWith("http") ? href : `${DOCS_BASE}${href}`;
-          if (!links.find(l => l.url === full)) links.push({ text, url: full });
-        }
-      });
-      return links.slice(0, 30).map(l => `${l.text}: ${l.url}`).join("\n") || "Could not list docs sections.";
-    } catch (err) {
-      return `Error listing docs: ${err.message}`;
-    }
+    description: "Fetch and read a specific page from the Yofi documentation site. Use this to get detailed information about a topic.",
+    input_schema: {
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description: "Full URL or relative path of the Yofi docs page, e.g. https://docs.yofi.ai/getting-started or /integrate-with-yofi",
+        },
+      },
+      required: ["url"],
+    },
   },
-  {
-    name: "list_yofi_docs_sections",
-    description: "List the top-level sections and pages available in the Yofi documentation. Use this first to discover what topics are available before fetching a specific page.",
-    schema: z.object({}),
+];
+
+// ── Tool implementations ───────────────────────────────────────────────────────
+async function listDocsSections() {
+  try {
+    const res = await axios.get(DOCS_BASE, { timeout: 8000, headers: { "User-Agent": "YofiAgent/1.0" } });
+    const $   = cheerio.load(res.data);
+    const links = [];
+    $("a[href]").each((_, el) => {
+      const href = $(el).attr("href") || "";
+      const text = $(el).text().trim();
+      if (href && text && text.length > 2 && text.length < 80) {
+        const full = href.startsWith("http") ? href : `${DOCS_BASE}${href.startsWith("/") ? "" : "/"}${href}`;
+        if (full.includes("yofi") && !links.find(l => l.url === full)) {
+          links.push({ text, url: full });
+        }
+      }
+    });
+    if (!links.length) return "Could not list sections — try fetching a specific page directly.";
+    return links.slice(0, 25).map(l => `${l.text}: ${l.url}`).join("\n");
+  } catch (err) {
+    return `Error: ${err.message}`;
   }
-);
-
-// ── Build the agent ───────────────────────────────────────────────────────────
-let agentExecutor = null;
-
-async function getAgent() {
-  if (agentExecutor) return agentExecutor;
-
-  const llm = new ChatAnthropic({
-    apiKey:      process.env.ANTHROPIC_API_KEY,
-    model:       "claude-sonnet-4-5",
-    temperature: 0.2,
-  });
-
-  const tools = [listDocsSectionsTool, fetchDocsTool];
-
-  const agent = await createReactAgent({ llm, tools });
-
-  agentExecutor = new AgentExecutor({
-    agent,
-    tools,
-    maxIterations:  8,
-    returnIntermediateSteps: false,
-    verbose: false,
-  });
-
-  return agentExecutor;
 }
 
-// ── Run a query through the agent ─────────────────────────────────────────────
+async function fetchDocsPage(url) {
+  try {
+    const fullUrl = url.startsWith("http") ? url : `${DOCS_BASE}${url.startsWith("/") ? "" : "/"}${url}`;
+    const res     = await axios.get(fullUrl, { timeout: 8000, headers: { "User-Agent": "YofiAgent/1.0" } });
+    const $       = cheerio.load(res.data);
+    $("script, style, nav, footer, header, .sidebar, [role='navigation']").remove();
+    const main = $("main, article, .content, .docs-content, [role='main']").first();
+    const text = (main.length ? main : $("body")).text()
+      .replace(/\s{3,}/g, "\n\n")
+      .replace(/\n{4,}/g, "\n\n")
+      .trim()
+      .slice(0, 6000);
+    return text || "No readable content found at this URL.";
+  } catch (err) {
+    return `Error fetching ${url}: ${err.message}`;
+  }
+}
+
+async function runTool(name, input) {
+  if (name === "list_yofi_docs_sections") return await listDocsSections();
+  if (name === "fetch_yofi_docs")         return await fetchDocsPage(input.url);
+  return "Unknown tool.";
+}
+
+// ── Agentic loop ──────────────────────────────────────────────────────────────
 async function runAgent(userMessage) {
-  const executor = await getAgent();
+  const messages = [
+    {
+      role: "user",
+      content: userMessage,
+    },
+  ];
 
-  const systemContext = `You are a Yofi expert assistant. Yofi is a fraud prevention and risk intelligence platform for e-commerce.
+  const system = `You are a Yofi expert assistant. Yofi is a fraud prevention and risk intelligence platform for e-commerce.
 
-Your job is to:
-1. Answer questions about how Yofi works, its APIs, integrations, and features
-2. Provide specific guidance and recommendations based on the official Yofi documentation
-3. Help users understand risk scores, predictions, signals, and segments
-4. Give actionable advice on integrating with Yofi
+Your job is to give accurate, specific guidance based on the official Yofi documentation.
+Always use your tools to look up the docs before answering — do not guess.
+Be practical and actionable. Reference specific pages or sections when relevant.`;
 
-Always use the documentation tools to look up accurate, up-to-date information before answering.
-Be specific, practical, and reference the actual docs when possible.`;
+  // Agentic loop — max 5 iterations
+  for (let i = 0; i < 5; i++) {
+    const response = await client.messages.create({
+      model:      "claude-sonnet-4-5",
+      max_tokens: 1024,
+      system,
+      tools:      TOOLS,
+      messages,
+    });
 
-  const result = await executor.invoke({
-    input: `${systemContext}\n\nUser question: ${userMessage}`,
-  });
+    // Append assistant response to history
+    messages.push({ role: "assistant", content: response.content });
 
-  return result.output;
+    // If Claude is done, return the final text
+    if (response.stop_reason === "end_turn") {
+      const textBlock = response.content.find(b => b.type === "text");
+      return textBlock?.text || "I wasn't able to find a clear answer in the Yofi docs.";
+    }
+
+    // If Claude wants to use tools, run them and feed results back
+    if (response.stop_reason === "tool_use") {
+      const toolResults = [];
+      for (const block of response.content) {
+        if (block.type === "tool_use") {
+          const result = await runTool(block.name, block.input);
+          toolResults.push({
+            type:        "tool_result",
+            tool_use_id: block.id,
+            content:     result,
+          });
+        }
+      }
+      messages.push({ role: "user", content: toolResults });
+    }
+  }
+
+  return "I reached the maximum number of steps. Please try a more specific question.";
 }
 
 module.exports = { runAgent };
