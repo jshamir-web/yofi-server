@@ -377,7 +377,9 @@ Key Implementation Rules:
     // If Claude is done, return the final text
     if (response.stop_reason === "end_turn") {
       const textBlock = response.content.find(b => b.type === "text");
-      return textBlock?.text || "I wasn't able to find a clear answer in the Yofi docs.";
+      const raw = textBlock?.text || "I wasn't able to find a clear answer in the Yofi docs.";
+      // Strip markdown bold/italic so the UI renders clean plain text
+      return raw.replace(/\*\*(.*?)\*\*/g, "$1").replace(/\*(.*?)\*/g, "$1").replace(/^#{1,6}\s+/gm, "").trim();
     }
 
     // If Claude wants to use tools, run them and feed results back
