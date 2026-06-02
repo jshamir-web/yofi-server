@@ -126,11 +126,11 @@ Keep all string values SHORT (under 100 chars). Be specific but concise.`;
 
 // ── Yofi Docs Agent endpoint ──────────────────────────────────────────────────
 app.post("/chat", async (req, res) => {
-  const { message } = req.body;
+  const { message, history = [] } = req.body;
   if (!message) return res.status(400).json({ error: "message is required." });
 
   try {
-    const answer = await runAgent(message);
+    const answer = await runAgent(message, history);
     res.json({ answer });
   } catch (err) {
     console.error("Agent error:", err.message);

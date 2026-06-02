@@ -76,12 +76,13 @@ async function runTool(name, input) {
 }
 
 // ── Agentic loop ──────────────────────────────────────────────────────────────
-async function runAgent(userMessage) {
+async function runAgent(userMessage, history = []) {
+  // Build messages array with prior conversation history
   const messages = [
-    {
-      role: "user",
-      content: userMessage,
-    },
+    // Inject history as alternating user/assistant turns
+    ...history.map(h => ({ role: h.role, content: h.content })),
+    // Current message
+    { role: "user", content: userMessage },
   ];
 
   const system = `You are a Yofi expert assistant. Yofi is a fraud prevention and risk intelligence platform for e-commerce.
